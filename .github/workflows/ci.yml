@@ -47,6 +47,10 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-solidify.txt
+      - name: Install Open3D system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1
       - name: Install mesh repair dependencies
         run: python -m pip install -r requirements.txt -r requirements-solidify.txt
       - name: Smoke test mesh repair and simplification

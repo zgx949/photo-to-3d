@@ -8,6 +8,7 @@
 - 分层依赖清单：`requirements.txt`（轻量后处理）、`requirements-solidify.txt`（实体修复 / 减面）、`requirements-dev.txt`（开发工具链）；`pyproject.toml` 补充项目元数据与 `light` / `solidify` / `preview` / `dev` 可选依赖分组。
 - 中英文 README、Codex 与 Claude Code 安装说明，以及 GitHub 版本发布指引。中文为默认入口。
 - CI 打包校验与实体修复测试。推送匹配版本的 `vX.Y.Z` 标签后，检查通过会自动发布 Skill ZIP 和 SHA-256 校验文件。
+- 中英文 README 加入两件彩色 OBJ 的 360° 转台预览。
 
 ### Changed
 - 合并 `ark_3d.py` 中重复定义的 `MODEL_EXTS` 白名单（保留完整后缀，含 `.gltf`）。
@@ -15,6 +16,7 @@
 
 ### Fixed
 - CI 使用支持 Python 3.9 的 Ubuntu 24.04，补齐 SciPy、NetworkX 依赖，并为 Python 3.9 选择兼容的减面依赖版本。
+- CI 的实体修复任务安装 EGL 和 OpenGL 运行库，解决 Open3D 导入时找不到 `libEGL.so.1` 的问题。
 - 付费生成前检查本地打印处理依赖。修复下载根目录下的 OBJ 与配套贴图、取消任务后的轮询、网格朝上轴及落地。`doctor` 用任务列表接口验证凭据。
 - 预览截图识别 Playwright 安装的 Chromium，HTML 预览正确转义标题和说明。
 - 泊松重建使用单线程，规避 Open3D 并行重建中出现的原生崩溃。

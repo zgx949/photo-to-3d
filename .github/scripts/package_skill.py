@@ -14,6 +14,8 @@ FILES = (
     "README.en.md",
     "README.md",
     "SKILL.md",
+    "assets/demos/chibi-suit-turntable.gif",
+    "assets/demos/figure-turntable.gif",
     "assets/viewer.template.html",
     "docs/architecture.md",
     "docs/faq.md",

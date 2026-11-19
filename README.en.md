@@ -12,6 +12,14 @@ Turn one portrait into a stylized 3D character with an STL for slicing, a colore
 
 The skill guides the agent through checking the source photo, preserving recognizable features and pose, and showing the reference for approval before submitting a billable job. The CLI starts from a prepared reference image and can also post-process an existing model locally.
 
+## 3D showcase
+
+| Figurine | Chibi in a suit |
+| :---: | :---: |
+| ![A 360° view of the figurine on a violet-lit pedestal](assets/demos/figure-turntable.gif) | ![A 360° view of the bespectacled chibi in a suit on a blue-lit pedestal](assets/demos/chibi-suit-turntable.gif) |
+
+Both turntable previews render the project's OBJ exports using the original vertex colors.
+
 ## Install the Agent Skill
 
 Download `photo-to-3d.zip` from [GitHub Releases](https://github.com/zgx949/photo-to-3d/releases). Extract the whole `photo-to-3d/` directory into your agent’s skills directory. You can also clone the repository and put the checkout in the same location.

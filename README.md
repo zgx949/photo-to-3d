@@ -12,6 +12,14 @@
 
 Skill 引导 Agent 检查照片、保留人物辨识特征和原始姿势，并在提交付费任务前展示参考图供确认。CLI 从已准备好的参考图开始，也能复用已有模型完成本地后处理。
 
+## 3D 模型展示
+
+| 手办 | Q 版西装男生 |
+| :---: | :---: |
+| ![手办在紫光展台上 360° 旋转](assets/demos/figure-turntable.gif) | ![戴眼镜的 Q 版西装男生在蓝光展台上 360° 旋转](assets/demos/chibi-suit-turntable.gif) |
+
+两段 360° 转台预览均由项目输出的彩色 OBJ 渲染，保留原始模型的顶点色。
+
 ## 安装 Agent Skill
 
 从 [GitHub Releases](https://github.com/zgx949/photo-to-3d/releases) 下载 `photo-to-3d.zip`，将解压出的整个 `photo-to-3d/` 放入 Agent 的技能目录。也可以克隆源码，把克隆出的目录放到相同位置。
