@@ -2,11 +2,11 @@
 
 ## 1. 没有方舟 API Key 能跑吗？
 
-不能，3D 那步必须 Key。但 `create --dry-run` 和全部单元测试都不需要 Key，可以先验证参数与逻辑。
+创建和查询方舟任务需要 Key。`create --dry-run`、已有模型的本地后处理和单元测试可以直接运行。下载已有的产物只需要有效的签名链接和任务 ID。
 
 ## 2. Key 会不会被上传或记录？
 
-不会。Key 只在本地读取，直接放进 HTTP 请求头发给方舟；CLI 不写日志、不回显。放在 `.ark_key` 时建议 `chmod 600`，该文件已在 `.gitignore` 里。
+CLI 从本地配置读取 Key，并通过 HTTPS 鉴权请求头发给方舟。通过运行环境或密钥管理器配置 `ARK_API_KEY`。使用 `.ark_key` 时可执行 `chmod 600 .ark_key` 限制访问。该文件已加入 `.gitignore`。
 
 ## 3. 报 401 / 403 怎么办？
 
@@ -31,7 +31,7 @@
 
 ## 8. glb 打不开 / 想看效果？
 
-glb 可拖进 Blender、Unity、Windows 3D 查看器，或任意 three.js 在线 viewer。macOS 预览 Quick Look 也支持。本项目 `make_preview.py` 会把彩色 glb 包成单文件 HTML 查看器，双击即可旋转、缩放、下载。
+可以用 Blender 打开 GLB。`make_preview.py` 会把彩色 GLB 包成单文件 HTML 查看器，双击即可旋转、缩放、下载。浏览器需联网加载 three.js。
 
 ## 9. 支持文生 3D 吗？
 

@@ -6,6 +6,7 @@
 |---|---|
 | 创建任务（异步） | `POST https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks` |
 | 查询任务 | `GET https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/{task_id}` |
+| 凭据检查 (`doctor`) | `GET https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks?page_size=1` |
 | 鉴权 | `Authorization: Bearer $ARK_API_KEY`，`Content-Type: application/json` |
 
 ## 创建任务请求体
@@ -63,7 +64,7 @@ pbr/textures/Material_0_diffuse.png
  "error":{...},"created_at":1234567890,"updated_at":1234567890}
 ```
 
-- `status` 枚举：`queued` / `running` / `succeeded` / `failed`。
+- `status` 常见值为 `queued`、`running`、`succeeded`、`failed` 和 `cancelled`。
 - 成功取 `content.file_url`；失败看 `error.code` / `error.message`。
 - 任务数据与产物链接**仅保留 24 小时**（任务 ID 从创建起 7 天内可查），过期需重新生成——务必下载转存。
 
@@ -80,7 +81,7 @@ pbr/textures/Material_0_diffuse.png
 | 403 / AccessDenied / `ModelNotOpen` | 账号未开通该 3D 模型 | 控制台「快速接入」开通 |
 | 429 | 触发限流 | 退避后重试 |
 | `failed` + 内容相关 error | 图片含敏感内容或主体不可识别 | 换图 |
-| `failed` + 服务异常 | 平台侧问题 | 最多重试 1 次 |
+| `failed` + 服务异常 | 平台侧问题 | 获得用户确认后重新提交 |
 
 ## 开通与账号
 

@@ -6,10 +6,18 @@
 
 ### Added
 - 分层依赖清单：`requirements.txt`（轻量后处理）、`requirements-solidify.txt`（实体修复 / 减面）、`requirements-dev.txt`（开发工具链）；`pyproject.toml` 补充项目元数据与 `light` / `solidify` / `preview` / `dev` 可选依赖分组。
+- 中英文 README、Codex 与 Claude Code 安装说明，以及 GitHub 版本发布指引。中文为默认入口。
+- CI 打包校验与实体修复测试。推送匹配版本的 `vX.Y.Z` 标签后，检查通过会自动发布 Skill ZIP 和 SHA-256 校验文件。
 
 ### Changed
 - 合并 `ark_3d.py` 中重复定义的 `MODEL_EXTS` 白名单（保留完整后缀，含 `.gltf`）。
-- 文档一致性修正：API 参考的产物格式列表补回 `glb`、去掉重复 `obj`；架构文档更新为「内置单文件 three.js 查看器」的现状；README 测试数、目录树与依赖安装口径与实际脚本对齐。
+- Skill 使用宿主提供的图像编辑与文件展示能力，凭据通过本地环境或密钥管理配置，保留付费生成前的参考图确认步骤。
+
+### Fixed
+- CI 使用支持 Python 3.9 的 Ubuntu 24.04，补齐 SciPy、NetworkX 依赖，并为 Python 3.9 选择兼容的减面依赖版本。
+- 付费生成前检查本地打印处理依赖。修复下载根目录下的 OBJ 与配套贴图、取消任务后的轮询、网格朝上轴及落地。`doctor` 用任务列表接口验证凭据。
+- 预览截图识别 Playwright 安装的 Chromium，HTML 预览正确转义标题和说明。
+- 泊松重建使用单线程，规避 Open3D 并行重建中出现的原生崩溃。
 
 ## [0.2.9] - 2026-11-19
 

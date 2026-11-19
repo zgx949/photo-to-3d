@@ -1,38 +1,34 @@
 # 贡献指南
 
-欢迎 issue 和 PR。这个项目很小，规则也简单。
+欢迎通过 [GitHub Issues](https://github.com/zgx949/photo-to-3d/issues) 报告问题或讨论功能。提交错误报告时，请带上 Python 版本、操作系统、可复现的命令和脱敏后的错误输出。提交模型问题时，可附一个可公开的最小复现样例。
 
-## 提交前
+## 本地检查
+
+从源码目录运行以下命令。如果要验证实体修复，再安装 `requirements-solidify.txt`。测试使用本地样例和模拟响应，无需方舟 API Key。
 
 ```bash
-make test      # 必须全绿
-make lint      # ruff，可选但建议
+python -m pip install -r requirements.txt -r requirements-dev.txt
+make lint
+make test
+make package
 ```
 
-测试全部离线，不会调真实接口，也不需要 Key。**不要在测试里发网络请求**——需要网络能力的部分请用纯函数拆出来测。
+修改行为时，更新对应的测试和用法。`ark_3d.py` 仅使用标准库。脚本的 JSON 结果写入 stdout，进度和日志写入 stderr。修改命令或输出字段时，同步检查两份 README 和 `SKILL.md`。保留参考图确认步骤，提交给 CI 的测试使用示例数据或模拟响应即可。
 
-## 提 PR 的流程
+## 提交 PR
 
-1. 先开 issue 说清要改什么、为什么（文档错漏可以直接提 PR）
-2. 从 `main` 拉分支：`feat/xxx`、`fix/xxx`、`docs/xxx`
-3. 提交信息用约定式前缀：`feat: ...` / `fix: ...` / `docs: ...` / `test: ...` / `chore: ...`
-4. PR 描述里写清：改了什么、怎么验证、有没有影响到 `SKILL.md` 描述的流程
+从 `main` 新建分支。在 PR 中说明改动、复现或验证方式，以及是否影响 Skill 的使用。请脱敏日志里的 Key、带签名的下载链接和任何私人照片。
 
-## 硬性约束
+## 发布新版本
 
-- **零第三方依赖**：`scripts/ark_3d.py` 只允许标准库。要引依赖先开 issue 讨论
-- **不改协议形态**：stdout 只输出 JSON 结果，日志走 stderr，否则会破坏 Agent 与管道的解析
-- **不提交任何密钥**：`.ark_key`、测试里的真实 Key、含 Key 的截图，一律不要进仓库
-- **不伪造测试**：涉及网络的逻辑用 `--dry-run` 或纯函数覆盖，不要靠 mock 假装跑通全链路
+1. 更新 `pyproject.toml` 和 `scripts/ark_3d.py` 的版本号，把 `CHANGELOG.md` 中对应改动归入新版本。
+2. 合并版本改动，确认 `main` 上的 CI 通过。从包含版本改动的提交创建并推送带 `v` 前缀的标签。以下以 `0.2.10` 为例。
 
-## 加新模型 / 新格式
+   ```bash
+   git tag -a v0.2.10 -m "Release v0.2.10"
+   git push origin v0.2.10
+   ```
 
-模型差异记在 `references/ark-3d-api.md`，CLI 侧只加 `--model` 的可选项并在 README 参数表补一行即可。产物后缀白名单在 `MODEL_EXTS`，加格式记得补一条单测。
+3. 标签触发 CI。验证通过后，GitHub Actions 创建 Release，附上可直接安装的 `photo-to-3d.zip` 和 SHA-256 校验文件 `photo-to-3d.zip.sha256`。在 Actions 和 Releases 页面查看状态。[CI](https://github.com/zgx949/photo-to-3d/actions/workflows/ci.yml) · [Releases](https://github.com/zgx949/photo-to-3d/releases)
 
-## 改 `SKILL.md` 的注意点
-
-`SKILL.md` 是给 Agent 读的执行手册，不是给人看的介绍文档。改动时保持：
-
-- 命令与参数和 CLI 实际行为一致
-- 硬性闸门（如"未确认不提交 3D"）不要被软化
-- 篇幅精简，细节放 `references/`
+下载两份文件到同一目录后，可运行 `shasum -a 256 -c photo-to-3d.zip.sha256` 校验压缩包。在 Linux 上也可使用 `sha256sum -c photo-to-3d.zip.sha256`。
