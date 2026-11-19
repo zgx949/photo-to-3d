@@ -10,7 +10,7 @@
         --textured extracted/pbr/mesh_textured_pbr.obj \
         --out ./color --name 手办
 
-依赖：trimesh、rtree（最近点查询）、numpy、pillow。
+依赖：trimesh、rtree 与 scipy（最近点查询）、numpy、pillow。
 stdout 只输出 JSON。
 """
 
@@ -57,10 +57,14 @@ def align(textured, solid, solid_up: str) -> float:
 
     axis = {"x": 0, "y": 1, "z": 2}[solid_up]
     src = float(textured.extents[1])  # 方舟产物 Y-up
+    if src <= 0 or solid.extents[axis] <= 0:
+        fail("模型沿朝上轴的尺寸为 0，无法对齐贴图")
     scale = float(solid.extents[axis]) / src
     textured.apply_scale(scale)
 
-    if solid_up != "y":
+    if solid_up == "x":
+        textured.apply_transform(trimesh.transformations.rotation_matrix(-np.pi / 2, [0, 0, 1]))
+    elif solid_up == "z":
         textured.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
 
     target_min = np.asarray(solid.bounds[0], dtype=float)
@@ -135,7 +139,7 @@ def despeckle(mesh, colors, threshold: int = 45, rounds: int = 2):
 
 
 def sharpen_head(mesh, colors, ratio: float = 0.22, strength: float = 1.15,
-                 band=(0.70, 0.92), luma_min: float = 95.0):
+                 band=(0.70, 0.92), luma_min: float = 95.0, axis: int = 2):
     """只在脸部那一圈做反锐化：提眼眉、唇线与鼻影，不碰头发和身体。
 
     头顶是最暗的一片头发，整段锐化会把它压成死黑；所以用高度带
@@ -143,14 +147,14 @@ def sharpen_head(mesh, colors, ratio: float = 0.22, strength: float = 1.15,
     """
     import numpy as np
 
-    z = mesh.vertices[:, 2]
-    zn = (z - z.min()) / max(z.max() - z.min(), 1e-9)
+    height = mesh.vertices[:, axis]
+    normalized = (height - height.min()) / max(height.max() - height.min(), 1e-9)
     lo, hi = band[0], band[1]
     # 没显式给 band 时，按 ratio 从顶部往下算一段
     if ratio > 0 and band == (0.70, 0.92):
         hi = 1.0
         lo = max(0.0, 1.0 - ratio)
-    idx = np.where((zn >= lo) & (zn <= hi))[0]
+    idx = np.where((normalized >= lo) & (normalized <= hi))[0]
     if not len(idx):
         return colors.astype(np.uint8), 0
     luma = colors[idx].astype(np.float32) @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
@@ -190,9 +194,11 @@ def main() -> None:
     try:
         import numpy as np
         import rtree  # noqa: F401  trimesh 最近点查询依赖
+        import scipy  # noqa: F401  trimesh 最近点查询依赖
         import trimesh
+        from PIL import Image  # noqa: F401  trimesh 贴图依赖
     except ImportError as exc:
-        fail(f"需要 trimesh、rtree、numpy、pillow（{exc}）")
+        fail(f"无法加载上色依赖（{exc}）。请运行 python -m pip install -r requirements.txt。")
 
     solid = trimesh.load(args.solid, force="mesh", process=False)
     if len(solid.faces) == 0:
@@ -212,7 +218,8 @@ def main() -> None:
 
     sharpened = 0
     if args.sharpen_head > 0:
-        colors, sharpened = sharpen_head(solid, colors, args.sharpen_head, args.sharpen_strength)
+        colors, sharpened = sharpen_head(solid, colors, args.sharpen_head, args.sharpen_strength,
+                                         axis={"x": 0, "y": 1, "z": 2}[args.solid_up])
         log(f"[color] 头部锐化：{sharpened:,} 个顶点")
 
     solid.visual = trimesh.visual.ColorVisuals(
@@ -227,8 +234,11 @@ def main() -> None:
 
     # 预览用 glb 转回 Y-up，浏览器 / Blender / 手机都能直接正着看
     preview = solid.copy()
-    if args.solid_up != "y":
+    if args.solid_up == "x":
+        preview.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [0, 0, 1]))
+    elif args.solid_up == "z":
         preview.apply_transform(trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0]))
+    if args.solid_up != "y":
         preview.apply_translation([0, -float(preview.bounds[0][1]), 0])
     glb_path = os.path.join(args.out, f"{name}-彩色.glb")
     preview.export(glb_path, file_type="glb")

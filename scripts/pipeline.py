@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""一条命令跑完整条链路：3D 生成（obj）→ 补实体 → 上色。
+"""一条命令串联 3D 生成（obj）、补实体、上色与预览。
 
-默认交付四件：可打印 obj / stl、彩色 obj / glb 预览，外加原始带贴图 obj 作为保底素材。
-不复用别人的判断——每一步都调各自脚本，stdout 只输出整条链路的 JSON 汇总。
+各步骤由独立脚本执行，stdout 只输出整条链路的 JSON 汇总。
 
 用法：
     python3 scripts/pipeline.py --image ref.png --out ./out --name 小王
@@ -13,10 +12,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
 import time
+from importlib import import_module
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ARK = os.path.join(HERE, "ark_3d.py")
@@ -41,7 +42,7 @@ def fail(msg: str, code: int = 1) -> None:
 
 
 def run_step(tag: str, argv: list[str], required: bool = True) -> dict | None:
-    """跑一个子脚本，返回它输出的 JSON；子脚本的 stderr 原样转发给用户看进度。"""
+    """跑一个子脚本，返回它输出的 JSON 和转发的日志。"""
     log(f"[pipeline] === {tag} ===")
     proc = subprocess.run([sys.executable, *argv], capture_output=True, text=True)
     if proc.stderr.strip():
@@ -74,23 +75,47 @@ def main() -> None:
                     help="跳过本地高精度修复，回到快档（25 万面、脸不再加密）")
     ap.add_argument("--faces", type=int, default=None, help="成品面数上限，默认修复档 60 万")
     ap.add_argument("--no-solidify", action="store_true",
-                    help="不补实体，只做尺度与导出（成品会有裂纹，仅用于对照）")
+                    help="跳过泊松重建，执行基础修复、缩放及导出")
     args = ap.parse_args()
 
+    if not (args.image or args.skip_3d):
+        fail("需要 --image（或用 --skip-3d 复用已有模型）")
+    if not math.isfinite(args.height) or args.height <= 0:
+        fail("--height 必须是大于 0 的有限数值")
+    if args.faces is not None and args.faces <= 0:
+        fail("--faces 必须大于 0")
+    if args.name and (args.name in (".", "..") or any(c in args.name for c in "/\\:")):
+        fail("--name 必须是文件名，不能包含路径")
+    if args.skip_3d and not os.path.isfile(os.path.expanduser(args.skip_3d)):
+        fail(f"--skip-3d 指向的文件不存在：{args.skip_3d}")
+
+    # 先检验打印步骤的依赖，避免支付生成费用后才发现本地无法处理。
+    requirements = {"requirements.txt": ("trimesh", "numpy", "networkx")}
+    if not args.no_solidify:
+        requirements["requirements-solidify.txt"] = ("open3d", "pymeshfix")
+    for requirements_file, modules in requirements.items():
+        for module in modules:
+            try:
+                import_module(module)
+            except (ImportError, OSError) as exc:
+                fail(f"无法加载本地处理依赖 {module}（{exc}）。"
+                     f"请运行 python -m pip install -r {requirements_file}。")
+
     started = time.time()
-    os.makedirs(args.out, exist_ok=True)
+    try:
+        os.makedirs(os.path.join(args.out, "print"), exist_ok=True)
+        if not args.skip_3d:
+            os.makedirs(os.path.join(args.out, "3d"), exist_ok=True)
+    except OSError as exc:
+        fail(f"无法创建输出目录：{exc}")
     steps: list[dict] = []
 
     # ---- 1. 3D 生成（obj，打印优先）----
     if args.skip_3d:
-        source = os.path.abspath(args.skip_3d)
-        if not os.path.exists(source):
-            fail(f"--skip-3d 指向的文件不存在：{source}")
+        source = os.path.abspath(os.path.expanduser(args.skip_3d))
         task_id = None
         log(f"[pipeline] 复用已有模型：{source}")
     else:
-        if not args.image:
-            fail("需要 --image（或用 --skip-3d 复用已有模型）")
         timer = time.time()
         argv = [ARK, "run", "--image", args.image,
                 "--out", os.path.join(args.out, "3d"), "--format", "obj", "--level", args.level]
@@ -111,14 +136,23 @@ def main() -> None:
     timer = time.time()
     argv = [PRINT, source, "--height", str(args.height),
             "--out", os.path.join(args.out, "print"), "--name", name]
-    if not args.no_solidify:
+    if args.no_solidify:
+        prep_mode = "scale"
+        prep_label = "基础修复与导出"
+    else:
+        prep_mode = "fast" if args.no_refine else "refine"
+        prep_label = "补实体与导出"
         argv += ["--solidify", "--samples", str(profile["samples"]),
                  "--depth", str(profile["depth"]), "--decimate", str(profile["faces"])]
         if profile["focus_head"] > 0:
             argv += ["--focus-head", str(profile["focus_head"])]
-    prep = run_step("补实体 / 高精度修复", argv)
+    try:
+        prep = run_step(prep_label, argv)
+    except SystemExit:
+        log(f"[pipeline] 可以用 --skip-3d 复用本地原始模型：{source}")
+        raise
     steps.append({"step": "print_prep", "seconds": round(time.time() - timer, 1),
-                  "mode": "fast" if args.no_refine else "refine",
+                  "mode": prep_mode,
                   "printable": prep.get("printable"), "triangles": prep.get("triangles"),
                   "watertight": prep.get("watertight"),
                   "boundary_edges": prep.get("boundary_edges"),
@@ -168,10 +202,9 @@ def main() -> None:
 
     warnings = list(prep.get("warnings") or [])
     if not args.no_color and not color:
-        warnings.append("上色未完成：源文件没有可用贴图（obj 要 mtl + textures 同目录，glb 要内嵌 baseColorTexture）；"
-                        "可先按素模交付，再补一张带贴图的 obj 重跑 --skip-3d")
-    if args.no_solidify:
-        warnings.append("未补实体：壳体开口，切片会留下裂纹，只适合对照")
+        warnings.append("上色未完成；请查看上色步骤日志，确认已安装轻量依赖且源模型有可用贴图。")
+    if not args.no_preview and color and not preview:
+        warnings.append("3D 预览生成失败；可用 make_preview.py 对彩色 GLB 单独生成")
     if not prep.get("printable") and not args.no_solidify:
         warnings.append("补实体后仍未判为可打印，看 boundary_edges / nonmanifold_edges 定位")
 
@@ -187,6 +220,8 @@ def main() -> None:
                                                "sharpen_head": profile["sharpen_head"]},
         "printable": bool(prep.get("printable")),
         "watertight": prep.get("watertight"),
+        "boundary_edges": prep.get("boundary_edges"),
+        "nonmanifold_edges": prep.get("nonmanifold_edges"),
         "volume_cm3": prep.get("volume_cm3"),
         "colored": bool(color),
         "steps": steps,

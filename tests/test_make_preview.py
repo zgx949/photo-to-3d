@@ -23,7 +23,7 @@ class MakePreviewTest(unittest.TestCase):
             trimesh.creation.box(extents=[1, 1, 1]).export(glb, file_type="glb")
             proc = subprocess.run(
                 [sys.executable, SCRIPT, glb, "--out", os.path.join(d, "p"),
-                 "--name", "样件", "--no-png"],
+                 "--name", "样件", "--summary", "<样件> & 说明", "--no-png"],
                 capture_output=True, text=True,
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -31,6 +31,7 @@ class MakePreviewTest(unittest.TestCase):
             with open(data["files"]["html"], encoding="utf-8") as f:
                 html = f.read()
             self.assertIn("样件", html)
+            self.assertIn("&lt;样件&gt; &amp; 说明", html)
             self.assertNotIn("__GLB_B64__", html)
             self.assertNotIn("__BLURB__", html)
 

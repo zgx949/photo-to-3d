@@ -2,7 +2,7 @@
 """把 glb 包成单文件 3D 查看器，顺手渲染一张缩略图。
 
 产物：
-    <out>/<name>-预览.html   glb 以 base64 内联，双击即可转、缩放、看细节（离线可用，只从 jsDelivr 取 three.js）
+    <out>/<name>-预览.html   glb 以 base64 内联，浏览器联网载入 Three.js 后可旋转和缩放
     <out>/<name>-预览.png    有 chromium + playwright 时才有，给聊天窗口先看一眼
 
 没有 playwright 不影响 html 产出。
@@ -14,7 +14,11 @@ import argparse
 import base64
 import json
 import os
+import re
+import shutil
 import sys
+from html import escape
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE = os.path.join(HERE, "assets", "viewer.template.html")
@@ -36,44 +40,41 @@ DEFAULT_BLURB = ("由一张照片生成的卡通参考图转成网格。角色�
 def build_html(glb_path: str, title: str, out_html: str, blurb: str = DEFAULT_BLURB) -> int:
     if not os.path.exists(TEMPLATE):
         fail(f"找不到查看器模板：{TEMPLATE}")
-    template = open(TEMPLATE, encoding="utf-8").read()
-    raw = open(glb_path, "rb").read()
-    b64 = base64.b64encode(raw).decode("ascii")
-    html = (template.replace("__GLB_B64__", b64)
-                    .replace("__TITLE__", title)
-                    .replace("__BLURB__", blurb))
-    with open(out_html, "w", encoding="utf-8") as f:
-        f.write(html)
+    template = Path(TEMPLATE).read_text(encoding="utf-8")
+    b64 = base64.b64encode(Path(glb_path).read_bytes()).decode("ascii")
+    values = {"__GLB_B64__": b64, "__TITLE__": escape(title), "__BLURB__": escape(blurb)}
+    html = re.sub(r"__GLB_B64__|__TITLE__|__BLURB__", lambda match: values[match[0]], template)
+    Path(out_html).write_text(html, encoding="utf-8")
     return len(b64)
 
 
 def render_png(html_path: str, out_png: str) -> bool:
     """用无头 chromium 截一张图；环境不具备就安静跳过。"""
     try:
-        from playwright.sync_api import sync_playwright
+        from playwright.sync_api import Error, sync_playwright
     except ImportError:
-        log("[preview] 没有 playwright，跳过缩略图（门票功能不受影响）")
-        return False
-
-    chromium = "/usr/local/bin/chromium"
-    if not os.path.exists(chromium):
-        log("[preview] 没有 chromium，跳过缩略图")
+        log("[preview] 没有 Playwright，跳过缩略图")
         return False
 
     proxy = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                executable_path=chromium,
-                args=["--no-sandbox", "--use-gl=angle", "--use-angle=swiftshader",
-                      "--enable-unsafe-swiftshader"],
-                proxy={"server": proxy} if proxy else None,
-            )
-            page = browser.new_page(viewport={"width": 1100, "height": 1200}, device_scale_factor=1)
-            page.goto("file://" + os.path.abspath(html_path))
-            page.wait_for_timeout(9000)
-            page.screenshot(path=out_png)
-            browser.close()
+            args = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
+            proxy_config = {"server": proxy} if proxy else None
+            try:
+                browser = p.chromium.launch(args=args, proxy=proxy_config)
+            except Error:
+                chromium = shutil.which("chromium") or shutil.which("chromium-browser")
+                if not chromium:
+                    raise
+                browser = p.chromium.launch(executable_path=chromium, args=args, proxy=proxy_config)
+            try:
+                page = browser.new_page(viewport={"width": 1100, "height": 1200}, device_scale_factor=1)
+                page.goto(Path(html_path).resolve().as_uri())
+                page.locator("#veil.gone").wait_for(state="attached", timeout=20_000)
+                page.screenshot(path=out_png)
+            finally:
+                browser.close()
         return os.path.exists(out_png)
     except Exception as exc:  # noqa: BLE001 截图失败不该拖垮主流程
         log(f"[preview] 缩略图失败：{exc}")

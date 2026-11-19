@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stdout
 from unittest import mock
 
@@ -159,8 +160,25 @@ class TestDoctor(unittest.TestCase):
         self.assertFalse(report["ok"])
         self.assertEqual(report["key_source"], "none")
 
+    def test_doctor_checks_task_list_status(self):
+        for status in (200, 401, 403, 404, 500):
+            with (self.subTest(status=status),
+                  mock.patch.object(ark, "http_json", return_value=(status, {})) as request):
+                code, out = run_cli(["--key", "test-key", "doctor"])
+                self.assertEqual(code, 0)
+                self.assertEqual(json.loads(out)["ok"], status == 200)
+                request.assert_called_once_with("GET", ark.TASKS + "?page_size=1", "test-key")
+
 
 class TestHelpers(unittest.TestCase):
+    def test_poll_stops_on_cancelled_task(self):
+        with mock.patch.object(ark, "get_task", return_value=(200, {"status": "cancelled"})), \
+                mock.patch.object(ark.time, "sleep") as sleep, \
+                redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit):
+            ark.poll_task("cgt-test", "test-key", interval=15, timeout=60)
+        sleep.assert_not_called()
+        self.assertIn("任务已取消", json.loads(out.getvalue())["error"])
+
     def test_file_url_of_variants(self):
         self.assertEqual(ark.file_url_of({"content": {"file_url": "u"}}), "u")
         self.assertEqual(ark.file_url_of({"content": {"url": "u2"}}), "u2")
@@ -202,7 +220,6 @@ class TestBundle(unittest.TestCase):
             self.assertIsNone(ark.sniff_ext(p))
 
     def test_extract_model_bundle_picks_glb(self):
-        import zipfile
         with tempfile.TemporaryDirectory() as d:
             zpath = os.path.join(d, "model-cgt-test.zip")
             payload = b"glTF\x02\x00\x00\x00payload"
@@ -217,23 +234,22 @@ class TestBundle(unittest.TestCase):
                 self.assertEqual(f.read(), payload)
 
     def test_extract_model_bundle_picks_obj_and_mtl(self):
-        import zipfile
-        with tempfile.TemporaryDirectory() as d:
-            zpath = os.path.join(d, "model-cgt-obj.zip")
-            with zipfile.ZipFile(zpath, "w") as z:
-                z.writestr("pbr/mesh_textured_pbr.obj", b"v 0 0 0\n")
-                z.writestr("pbr/mesh_textured_pbr.mtl", b"newmtl m\n")
-                z.writestr("pbr/textures/diffuse.png", b"PNG")
-            out_dir = os.path.join(d, "out")
-            os.makedirs(out_dir)
-            target = ark.extract_model_bundle(zpath, out_dir, "cgt-obj")
-            self.assertEqual(target, os.path.join(out_dir, "model-cgt-obj", "mesh_textured_pbr.obj"))
-            # mtl 与贴图必须一起带出来，否则 obj 的材质引用会断
-            self.assertTrue(os.path.exists(os.path.join(out_dir, "model-cgt-obj", "mesh_textured_pbr.mtl")))
-            self.assertTrue(os.path.exists(os.path.join(out_dir, "model-cgt-obj", "textures", "diffuse.png")))
+        for prefix in ("", "pbr/"):
+            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as d:
+                zpath = os.path.join(d, "model-cgt-obj.zip")
+                with zipfile.ZipFile(zpath, "w") as z:
+                    z.writestr(prefix + "mesh_textured_pbr.obj", b"v 0 0 0\n")
+                    z.writestr(prefix + "mesh_textured_pbr.mtl", b"newmtl m\n")
+                    z.writestr(prefix + "textures/diffuse.png", b"PNG")
+                out_dir = os.path.join(d, "out")
+                model_dir = os.path.join(out_dir, "model-cgt-obj")
+                target = ark.extract_model_bundle(zpath, out_dir, "cgt-obj")
+                self.assertEqual(target, os.path.join(model_dir, "mesh_textured_pbr.obj"))
+                self.assertTrue(os.path.isfile(target))
+                self.assertTrue(os.path.isfile(os.path.join(model_dir, "mesh_textured_pbr.mtl")))
+                self.assertTrue(os.path.isfile(os.path.join(model_dir, "textures", "diffuse.png")))
 
     def test_extract_model_bundle_prefers_glb_over_obj(self):
-        import zipfile
         with tempfile.TemporaryDirectory() as d:
             zpath = os.path.join(d, "model-cgt-mixed.zip")
             with zipfile.ZipFile(zpath, "w") as z:
@@ -243,9 +259,10 @@ class TestBundle(unittest.TestCase):
             os.makedirs(out_dir)
             target = ark.extract_model_bundle(zpath, out_dir, "cgt-mixed")
             self.assertTrue(target.endswith(".glb"))
+            target = ark.extract_model_bundle(zpath, out_dir, "cgt-mixed", "obj")
+            self.assertTrue(target.endswith(".obj"))
 
     def test_extract_model_bundle_without_model(self):
-        import zipfile
         with tempfile.TemporaryDirectory() as d:
             zpath = os.path.join(d, "model-cgt-test.zip")
             with zipfile.ZipFile(zpath, "w") as z:
@@ -271,6 +288,17 @@ class TestCliSurface(unittest.TestCase):
         report = json.loads(out)
         self.assertTrue(report["dry_run"])
         self.assertEqual(report["request"]["model"], ark.DEFAULT_MODEL)
+
+    def test_download_does_not_read_key(self):
+        args = ["download", "--file-url", "https://example.com/model.zip",
+                "--task-id", "cgt-test", "--out", "."]
+        with mock.patch.object(ark, "find_key") as find_key, \
+                mock.patch.object(ark, "download", return_value={"path": "model.zip"}) as download:
+            code, out = run_cli(args)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), {"path": "model.zip"})
+        find_key.assert_not_called()
+        download.assert_called_once_with("https://example.com/model.zip", ".", "cgt-test")
 
     def test_dry_run_masks_base64(self):
         code, out = run_cli(["create", "--image",

@@ -15,12 +15,15 @@ import argparse
 import base64
 import json
 import os
+import re
 import shutil
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 import zipfile
+from pathlib import PurePosixPath
 
 __version__ = "0.2.9"
 
@@ -159,6 +162,8 @@ def poll_task(task_id, key, interval, timeout):
             return resp
         if status == "failed":
             fail(f"任务失败：{json.dumps(resp.get('error', resp), ensure_ascii=False)[:800]}")
+        if status == "cancelled":
+            fail(f"任务已取消：task_id={task_id}")
         if time.time() - started > timeout:
             fail(f"等待超时（{timeout} 秒仍为 {status}），task_id={task_id} "
                  f"仍可稍后用 status 子命令查询。")
@@ -191,47 +196,55 @@ def sniff_ext(path):
     return None
 
 
-def extract_model_bundle(zip_path, out_dir, task_id):
+def extract_model_bundle(zip_path, out_dir, task_id, preferred_format=None):
     """从方舟的 zip 产物中取出模型文件，返回其本地路径。
 
     glb 直接取出；obj 会把同目录的 mtl 与贴图一起带出来，否则贴图引用会断。
     """
     with zipfile.ZipFile(zip_path) as z:
-        names = [n for n in z.namelist() if not n.endswith("/")]
-        members = [n for n in names if n.lower().endswith(MODEL_EXTS)]
+        names = {}
+        for info in z.infolist():
+            path = PurePosixPath(info.filename)
+            if info.is_dir() or path.is_absolute() or ".." in path.parts:
+                continue
+            if "\\" in info.filename or ":" in info.filename:
+                continue
+            names[path] = info
+        members = [path for path in names if path.suffix.lower() in MODEL_EXTS]
         if not members:
             return None
 
-        members.sort(key=lambda n: MODEL_EXTS.index(os.path.splitext(n)[1].lower()))
-        member = members[0]
-        ext = os.path.splitext(member)[1].lower()
+        preferred_ext = f".{preferred_format}"
+        member = min(members, key=lambda p: (p.suffix.lower() != preferred_ext,
+                                              MODEL_EXTS.index(p.suffix.lower())))
+        ext = member.suffix.lower()
 
         if ext == ".obj":
-            prefix = os.path.dirname(member)
-            subset = [n for n in names if prefix and n.startswith(prefix + "/")]
             dest_root = os.path.join(out_dir, f"model-{task_id}")
-            for n in subset:
-                rel = os.path.relpath(n, prefix)
-                if rel.startswith(".."):
+            for path, info in names.items():
+                if not path.is_relative_to(member.parent):
                     continue
-                dst = os.path.join(dest_root, rel)
+                rel = path.relative_to(member.parent)
+                dst = os.path.join(dest_root, *rel.parts)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
-                with z.open(n) as src, open(dst, "wb") as fp:
+                with z.open(info) as src, open(dst, "wb") as fp:
                     shutil.copyfileobj(src, fp)
-            target = os.path.join(dest_root, os.path.relpath(member, prefix))
+            target = os.path.join(dest_root, member.name)
         else:
             target = os.path.join(out_dir, f"model-{task_id}{ext}")
-            with z.open(member) as src, open(target, "wb") as dst:
+            with z.open(names[member]) as src, open(target, "wb") as dst:
                 shutil.copyfileobj(src, dst)
 
     log(f"已从压缩包解出模型：{member} -> {target}")
     return target
 
 
-def download(file_url, out_dir, task_id):
+def download(file_url, out_dir, task_id, preferred_format=None):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", task_id):
+        fail("task_id 只能包含字母、数字、连字符和下划线")
     os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, f"model-{task_id}")
     req = urllib.request.Request(file_url)
+    temp_path = None
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
             cd = resp.headers.get("Content-Disposition", "")
@@ -239,26 +252,27 @@ def download(file_url, out_dir, task_id):
             if "filename=" in cd:
                 name = cd.split("filename=")[-1].strip('"; ')
             ext = guess_ext(name, file_url)
-            path = os.path.join(out_dir, f"model-{task_id}{ext}")
-            with open(path, "wb") as f:
-                while True:
-                    chunk = resp.read(1 << 20)
-                    if not chunk:
-                        break
-                    f.write(chunk)
+            with tempfile.NamedTemporaryFile(dir=out_dir, delete=False) as f:
+                temp_path = f.name
+                shutil.copyfileobj(resp, f, length=1 << 20)
+
+        # 方舟的下载名可能是 .glb，实际返回内容则是 zip 包。
+        ext = sniff_ext(temp_path) or ext
+        path = os.path.join(out_dir, f"model-{task_id}{ext}")
+        os.replace(temp_path, path)
+        temp_path = None
     except urllib.error.URLError as e:
         fail(f"下载失败：{e.reason}（产物链接 24 小时有效，过期需重新生成）")
-
-    # Content-Disposition 可能是 .glb，但方舟实际返回 zip 包：以文件头为准
-    detected = sniff_ext(path)
-    if detected and not path.lower().endswith(detected):
-        renamed = os.path.splitext(path)[0] + detected
-        os.replace(path, renamed)
-        path = renamed
+    finally:
+        if temp_path:
+            os.unlink(temp_path)
 
     model_path = path
     if path.lower().endswith(".zip"):
-        model_path = extract_model_bundle(path, out_dir, task_id) or path
+        try:
+            model_path = extract_model_bundle(path, out_dir, task_id, preferred_format) or path
+        except zipfile.BadZipFile:
+            fail(f"下载的产物不是有效的 ZIP 文件：{path}")
 
     return {"path": path, "model_path": model_path, "bytes": os.path.getsize(path)}
 
@@ -302,38 +316,38 @@ def main():
     sub.add_parser("doctor", help="自检：Key 是否已配置、是否被服务端接受（不产生费用）")
 
     args = ap.parse_args()
-    key, source = find_key(args.key)
-    if args.cmd != "doctor" and not (args.cmd == "create" and args.dry_run) and not key:
-        fail(f"缺少方舟 API Key：请写入 {KEY_FILE}，或设置环境变量 ARK_API_KEY，或传 --key。")
+    if args.cmd == "download":
+        info = download(args.file_url, args.out, args.task_id)
+        print(json.dumps(info, ensure_ascii=False))
+        return
 
     if args.cmd == "doctor":
+        key, source = find_key(args.key)
         if not key:
             print(json.dumps({"ok": False, "key_source": "none", "http": None,
-                              "hint": "还没有配置 Key。让用户把方舟 API Key 发给你，"
-                                      f"写入 {KEY_FILE} 后重新自检。"}, ensure_ascii=False))
+                              "hint": "请先设置环境变量 ARK_API_KEY，"
+                                      f"或在本机写入 {KEY_FILE} 后重新自检。"}, ensure_ascii=False))
             sys.exit(0)
-        code, resp = http_json(
-            "GET", TASKS + "/cgt-000000000000000000000000", key)
+        code, _ = http_json("GET", TASKS + "?page_size=1", key)
         if code == 401:
-            print(json.dumps({"ok": False, "key_source": source, "http": code,
-                              "hint": "Key 无效或填错，请重新复制方舟控制台的 API Key"},
-                             ensure_ascii=False))
-        elif code in (200, 400, 404, 422):
-            print(json.dumps({"ok": True, "key_source": source, "http": code,
-                              "auth": "passed",
-                              "hint": "Key 已被接受。若建任务返回 403，说明账号未开通 Seed3D 模型"},
-                             ensure_ascii=False))
+            hint = "方舟未接受 API Key，请在本机检查凭据配置"
+        elif code == 403:
+            hint = "方舟拒绝访问任务列表，请检查账号权限"
+        elif code == 200:
+            hint = "任务列表访问成功，请另行在方舟控制台确认 Seed3D 模型已开通"
         else:
-            print(json.dumps({"ok": True, "key_source": source, "http": code,
-                              "auth": "unclear",
-                              "hint": f"服务端返回 {code}，鉴权未明确失败，可继续尝试建任务"},
-                             ensure_ascii=False))
+            hint = f"任务列表返回 HTTP {code}，无法验证凭据"
+        print(json.dumps({"ok": code == 200, "key_source": source, "http": code,
+                          "auth": "passed" if code == 200 else "unclear",
+                          "hint": hint}, ensure_ascii=False))
     elif args.cmd == "create":
+        key = None if args.dry_run else load_key(args.key)
         task_id = create_task(build_payload(args.image, args.model, args.format, args.level),
                               key, args.dry_run)
         if task_id:
             print(json.dumps({"task_id": task_id, "model": args.model}, ensure_ascii=False))
     elif args.cmd == "status":
+        key = load_key(args.key)
         code, resp = get_task(args.task_id, key)
         if code != 200:
             fail(f"查询失败（HTTP {code}）：{json.dumps(resp, ensure_ascii=False)[:800]}")
@@ -341,19 +355,17 @@ def main():
                           "file_url": file_url_of(resp),
                           "error": resp.get("error")}, ensure_ascii=False))
     elif args.cmd == "run":
+        key = load_key(args.key)
         task_id = create_task(build_payload(args.image, args.model, args.format, args.level),
                               key)
         task = poll_task(task_id, key, args.poll_interval, args.timeout)
         url = file_url_of(task)
         if not url:
             fail(f"任务成功但未返回 file_url：{json.dumps(task, ensure_ascii=False)[:800]}")
-        info = download(url, args.out, task_id)
+        info = download(url, args.out, task_id, args.format)
         print(json.dumps({"task_id": task_id, "status": "succeeded", "file_url": url,
                           "path": info["path"], "model_path": info["model_path"],
                           "bytes": info["bytes"]}, ensure_ascii=False))
-    elif args.cmd == "download":
-        info = download(args.file_url, args.out, args.task_id)
-        print(json.dumps(info, ensure_ascii=False))
 
 
 if __name__ == "__main__":

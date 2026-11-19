@@ -63,14 +63,28 @@ class TestPrintPrep(unittest.TestCase):
             self.assertAlmostEqual(data["size_mm"]["height"], 150.0, delta=0.5)
             self.assertAlmostEqual(data["size_mm"]["width"], 75.0, delta=0.5)
             self.assertAlmostEqual(data["size_mm"]["depth"], 45.0, delta=0.5)
+            mesh = trimesh.load(data["files"]["stl"])
+            self.assertAlmostEqual(mesh.bounds[0][2], 0)
+
+    def test_up_axis_x(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "cube.obj")
+            make_cube(src, height=1.0)
+            code, out, err = self.run_script(src, "--up", "x", "--out", os.path.join(d, "pr"))
+            self.assertEqual(code, 0, err)
+            data = json.loads(out)
+            self.assertEqual(data["size_mm"], {"width": 300, "depth": 90, "height": 150})
 
     def test_decimate_reduces_faces(self):
+        try:
+            import fast_simplification  # noqa: F401
+        except ImportError:
+            self.skipTest("未安装 fast-simplification")
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "cube.obj")
             make_cube(src, height=1.0)
             code, out, err = self.run_script(src, "--height", "150", "--decimate", "2", "--no-stl", "--out", os.path.join(d, "pr"))
-            if code != 0:
-                self.skipTest("未安装 fast-simplification")
+            self.assertEqual(code, 0, err)
             data = json.loads(out)
             # 减面算法不保证精确命中目标，只要求明显低于原来的 12 面
             self.assertLess(data["triangles"], 12)
@@ -91,7 +105,8 @@ class TestPrintPrep(unittest.TestCase):
             src = os.path.join(d, "cube.obj")
             make_cube(src, height=1.0)
             code, out, err = self.run_script(
-                src, "--height", "40", "--solidify", "--no-stl", "--out", os.path.join(d, "pr")
+                src, "--height", "40", "--solidify", "--samples", "20000", "--depth", "6",
+                "--no-stl", "--out", os.path.join(d, "pr"),
             )
             self.assertEqual(code, 0, err)
             data = json.loads(out)

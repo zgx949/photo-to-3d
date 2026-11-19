@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from typing import Any
@@ -134,8 +135,10 @@ def solidify(mesh, samples: int, depth: int, target_faces: int,
     pcd.normals = o3d.utility.Vector3dVector(point_normals.astype(np.float64))
 
     log(f"[print] 泊松重建：{len(points):,} 点，depth={depth}")
+    # Open3D 的并行泊松重建有概率在原生层中止进程。
+    # https://github.com/isl-org/Open3D/issues/2027
     recon, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-        pcd, depth=depth, scale=1.1
+        pcd, depth=depth, scale=1.1, n_threads=1
     )
     if target_faces > 0 and len(recon.triangles) > target_faces:
         recon = recon.simplify_quadric_decimation(target_number_of_triangles=target_faces)
@@ -160,13 +163,15 @@ def solidify(mesh, samples: int, depth: int, target_faces: int,
     }
 
 
-def rotate_to_z_up(mesh) -> Any:
-    """STL 没有“哪边朝上”的定义，切片软件默认 Z 轴竖直。把 Y-up 模型转正并落到 z=0。"""
+def rotate_to_z_up(mesh, up: str = "y") -> Any:
+    """把输入模型的朝上轴转到 Z，并落到 z=0。"""
     import numpy as np
     import trimesh
 
-    matrix = trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])
-    mesh.apply_transform(matrix)
+    if up == "x":
+        mesh.apply_transform(trimesh.transformations.rotation_matrix(-np.pi / 2, [0, 1, 0]))
+    elif up == "y":
+        mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
     mesh.apply_translation([0, 0, -float(mesh.bounds[0][2])])
     return mesh
 
@@ -188,10 +193,12 @@ def main() -> None:
     ap.add_argument("--decimate", type=int, default=0,
                     help=f"减面到指定面数（0 = 不减；补实体时默认 {DEFAULT_SOLID_FACES:,}）")
     ap.add_argument("--focus-head", type=float, default=0.0,
-                    help="头部加密采样的比例（0 关闭，0.2 表示顶部 20% 高度内取样密度提高）")
+                    help="头部加密采样的比例（0 关闭，0.2 表示顶部 20%% 高度内取样密度提高）")
     ap.add_argument("--no-stl", action="store_true", help="只导出 obj")
     args = ap.parse_args()
 
+    if not args.keep_source_units and (not math.isfinite(args.height) or args.height <= 0):
+        fail("--height 必须是大于 0 的有限数值")
     mesh = load_mesh(args.model)
     if len(mesh.faces) == 0:
         fail("模型里没有三角面")
@@ -221,14 +228,11 @@ def main() -> None:
     if args.keep_source_units:
         scale = 1.0
     else:
-        if args.height <= 0:
-            fail("--height 必须大于 0")
         scale = args.height / float(mesh.extents[axis])
         mesh.apply_scale(scale)
 
     rotated = args.up != "z"
-    if rotated:
-        mesh = rotate_to_z_up(mesh)
+    mesh = rotate_to_z_up(mesh, args.up)
 
     ext = [float(v) for v in mesh.extents]
     height_mm = ext[2]

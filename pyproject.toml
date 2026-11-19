@@ -13,10 +13,17 @@ keywords = ["3d", "seed3d", "image-to-3d", "figure", "3d-printing", "agent-skill
 # 依赖按功能分层。`ark_3d.py` 核心 CLI 不引入任何第三方依赖。
 [project.optional-dependencies]
 # 轻量后处理：尺度诊断、上色、预览页
-light = ["trimesh>=4.0", "numpy>=1.24", "pillow>=9.0", "rtree>=1.0"]
+light = [
+    "trimesh>=4.0", "numpy>=1.24", "pillow>=9.0", "rtree>=1.0",
+    "scipy>=1.9", "networkx>=2.8",
+]
 # 实体修复（--solidify）与减面
-solidify = ["open3d>=0.17", "pymeshfix>=0.16", "fast-simplification>=0.1.0"]
-# 可选：预览缩略图渲染（还需系统 Chromium）
+solidify = [
+    "open3d>=0.17", "pymeshfix>=0.16",
+    "fast-simplification>=0.1.0,<0.1.13; python_version < '3.10'",
+    "fast-simplification>=0.1.0; python_version >= '3.10'",
+]
+# 可选：预览缩略图渲染（需 Playwright 安装的或系统提供的 Chromium）
 preview = ["playwright>=1.45"]
 # 开发 / 测试工具链
 dev = ["ruff>=0.5"]
