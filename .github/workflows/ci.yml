@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install light deps (heavy ones auto-skip)
+        run: pip install trimesh numpy pillow rtree
+      - name: Run unit tests (offline, no API key needed)
+        run: python -m unittest discover -s tests -v
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+
+  skill-structure:
+    name: skill structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check SKILL.md frontmatter
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          text = pathlib.Path("SKILL.md").read_text(encoding="utf-8")
+          if not text.startswith("---"):
+              sys.exit("SKILL.md 缺少 frontmatter")
+          head = text.split("---", 2)[1]
+          for field in ("name:", "description:"):
+              if field not in head:
+                  sys.exit(f"SKILL.md frontmatter 缺少 {field}")
+          print("SKILL.md frontmatter OK")
+          PY
+      - name: Check referenced files exist
+        run: |
+          test -f scripts/pipeline.py
+          test -f scripts/make_preview.py
+          test -f assets/viewer.template.html
+          test -f scripts/ark_3d.py
+          test -f scripts/print_prep.py
+          test -f scripts/bake_color.py
+          test -f references/ark-3d-api.md
+          test -f references/identity-prompt.md

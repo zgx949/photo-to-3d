@@ -1,0 +1,5 @@
+# 实体修复（--solidify）与减面所需的重依赖。
+# 不补实体、只做尺度诊断时可以不装；open3d 装不上见 README 退路。
+open3d>=0.17
+pymeshfix>=0.16
+fast-simplification>=0.1.0

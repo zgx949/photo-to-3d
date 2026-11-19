@@ -1,0 +1,4 @@
+# 开发 / 测试工具链。
+ruff>=0.5
+# 可选：缩略图渲染需要系统 Chromium，Python 侧只装 playwright 即可。
+# playwright>=1.45

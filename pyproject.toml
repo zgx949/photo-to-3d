@@ -1,0 +1,33 @@
+# 本项目以脚本形式直接运行，不构建为 Python 发行包；
+# 此处元数据与可选依赖分组供开发者、工具链与未来打包使用。
+
+[project]
+name = "photo-to-3d"
+version = "0.2.9"
+description = "照片 → 卡通参考图 → Seed3D 图生 3D → 可打印实体与彩色预览的 CLI / Agent Skill"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+keywords = ["3d", "seed3d", "image-to-3d", "figure", "3d-printing", "agent-skill"]
+
+# 依赖按功能分层。`ark_3d.py` 核心 CLI 不引入任何第三方依赖。
+[project.optional-dependencies]
+# 轻量后处理：尺度诊断、上色、预览页
+light = ["trimesh>=4.0", "numpy>=1.24", "pillow>=9.0", "rtree>=1.0"]
+# 实体修复（--solidify）与减面
+solidify = ["open3d>=0.17", "pymeshfix>=0.16", "fast-simplification>=0.1.0"]
+# 可选：预览缩略图渲染（还需系统 Chromium）
+preview = ["playwright>=1.45"]
+# 开发 / 测试工具链
+dev = ["ruff>=0.5"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
