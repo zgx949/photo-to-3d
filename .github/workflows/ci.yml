@@ -3,62 +3,150 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     name: test (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    # The Python 3.9 x64 build is available on Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install light deps (heavy ones auto-skip)
-        run: pip install trimesh numpy pillow rtree
-      - name: Run unit tests (offline, no API key needed)
-        run: python -m unittest discover -s tests -v
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install post-processing dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run offline tests
+        run: make test PY=python
+
+  solidify:
+    name: solidify (py3.12)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-solidify.txt
+      - name: Install mesh repair dependencies
+        run: python -m pip install -r requirements.txt -r requirements-solidify.txt
+      - name: Smoke test mesh repair and simplification
+        run: |
+          python -c 'import fast_simplification, open3d, pymeshfix'
+          python -m unittest discover -s tests -p test_print_prep.py -v
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - run: pip install ruff
-      - run: ruff check .
+      - run: python -m pip install -r requirements-dev.txt
+      - run: make lint
 
   skill-structure:
     name: skill structure
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - name: Check SKILL.md frontmatter
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install Skill validation dependency
+        run: python -m pip install 'PyYAML>=6,<7'
+      - name: Validate Skill metadata and version
+        shell: bash
         run: |
           python - <<'PY'
-          import pathlib, sys
-          text = pathlib.Path("SKILL.md").read_text(encoding="utf-8")
-          if not text.startswith("---"):
-              sys.exit("SKILL.md 缺少 frontmatter")
-          head = text.split("---", 2)[1]
-          for field in ("name:", "description:"):
-              if field not in head:
-                  sys.exit(f"SKILL.md frontmatter 缺少 {field}")
-          print("SKILL.md frontmatter OK")
+          import os
+          import subprocess
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          import yaml
+
+          header, closing, body = Path("SKILL.md").read_text(encoding="utf-8").partition("\n---\n")
+          if not header.startswith("---\n") or not closing or not body.strip():
+              sys.exit("SKILL.md must contain YAML frontmatter followed by a body")
+          metadata = yaml.safe_load(header.removeprefix("---\n"))
+          if not isinstance(metadata, dict) or metadata.get("name") != "photo-to-3d":
+              sys.exit("Skill name must be photo-to-3d")
+          description = metadata.get("description")
+          if not isinstance(description, str) or not description.strip() or len(description) > 1024:
+              sys.exit("Skill description must be a non-empty string of up to 1024 characters")
+
+          version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          cli = subprocess.check_output([sys.executable, "scripts/ark_3d.py", "--version"], text=True).strip()
+          if cli != f"ark_3d {version}":
+              sys.exit(f"CLI version ({cli}) does not match pyproject.toml ({version})")
+          if os.getenv("GITHUB_REF_TYPE") == "tag" and os.environ["GITHUB_REF_NAME"] != f"v{version}":
+              sys.exit(f"Release tag must be v{version} for this version")
           PY
-      - name: Check referenced files exist
+      - name: Build and smoke test the Skill archive
+        shell: bash
         run: |
-          test -f scripts/pipeline.py
-          test -f scripts/make_preview.py
-          test -f assets/viewer.template.html
-          test -f scripts/ark_3d.py
-          test -f scripts/print_prep.py
-          test -f scripts/bake_color.py
-          test -f references/ark-3d-api.md
-          test -f references/identity-prompt.md
+          make package PY=python
+          cd dist
+          sha256sum --check photo-to-3d.zip.sha256
+          python -m zipfile -t photo-to-3d.zip
+          python -m zipfile -e photo-to-3d.zip "$RUNNER_TEMP/skill"
+          cd "$RUNNER_TEMP/skill/photo-to-3d"
+          for script in scripts/*.py; do
+            python "$script" --help > /dev/null
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: photo-to-3d-skill
+          path: |
+            dist/photo-to-3d.zip
+            dist/photo-to-3d.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: publish release
+    if: github.event_name == 'push' && github.ref_type == 'tag' && !github.event.deleted
+    needs: [test, solidify, lint, skill-structure]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: photo-to-3d-skill
+          path: dist
+      - name: Publish the verified Skill archive to GitHub Releases
+        working-directory: dist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum --check photo-to-3d.zip.sha256
+          gh release create "$GITHUB_REF_NAME" photo-to-3d.zip photo-to-3d.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
